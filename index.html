@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title> Webcam Pong by kelaocai</title>
+  <style>
+    body {
+      margin: 0;
+      background: black;
+      display: flex;
+      flex-direction: column; 
+      align-items: center;
+      height: 100vh;
+      color: white;
+      font-family: Arial, sans-serif;
+    }
+    h1 {
+      margin: 20px 0 10px 0;
+      font-size: 36px;
+      color: #00ff88;
+      text-shadow: 2px 2px 4px rgba(0,0,0,0.6);
+    }
+    .container {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+    }
+    #gameCanvas { background: #111; }
+    #videoCanvas { background: #000; margin-left: 10px; }
+  </style>
+</head>
+<body>
+<h1>Webcam Pong </h1>
+<div class="container">
+  <canvas id="gameCanvas" width="800" height="500"></canvas>
+  <canvas id="videoCanvas" width="270" height="480"></canvas> <!-- 9:16比例 -->
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/handpose"></script>
+
+<script>
+  const gameCanvas = document.getElementById('gameCanvas');
+  const gameCtx = gameCanvas.getContext('2d');
+
+  const videoCanvas = document.getElementById('videoCanvas');
+  const videoCtx = videoCanvas.getContext('2d');
+
+  let leftPaddleY = gameCanvas.height/2 - 40;
+  let rightPaddleY = gameCanvas.height/2 - 40;
+  let paddleHeight = 80, paddleWidth = 10;
+  let ballX = gameCanvas.width/2, ballY = gameCanvas.height/2;
+  let ballDX = 4, ballDY = 2, ballSize = 10;
+
+  let leftScore = 0, rightScore = 0;
+  let video;
+
+  let smoothRightPaddleY = gameCanvas.height / 2 - paddleHeight / 2;
+  let alpha = 0.4; // 平滑系数
+  let handCenterX = 0; // 手部水平中心位置
+
+  async function initCamera() {
+    video = document.createElement('video');
+    video.autoplay = true;
+    video.playsInline = true;
+    video.width = 640;
+    video.height = 480;
+    await navigator.mediaDevices.getUserMedia({video: true}).then(stream => {
+      video.srcObject = stream;
+    });
+    return new Promise(resolve => {
+      video.onloadedmetadata = () => resolve(video);
+    });
+  }
+
+  function drawSkeleton(prediction, cropX, cropY, cropWidth, cropHeight) {
+    const connections = [
+      ['thumb', 'indexFinger'],
+      ['indexFinger', 'middleFinger'],
+      ['middleFinger', 'ringFinger'],
+      ['ringFinger', 'pinky'],
+      ['thumb', 'palmBase'],
+      ['indexFinger', 'palmBase'],
+      ['middleFinger', 'palmBase'],
+      ['ringFinger', 'palmBase'],
+      ['pinky', 'palmBase']
+    ];
+
+    for (let finger of Object.keys(prediction.annotations)) {
+      const points = prediction.annotations[finger];
+      for (let i = 0; i < points.length - 1; i++) {
+        const [x1, y1] = points[i];
+        const [x2, y2] = points[i + 1];
+        videoCtx.beginPath();
+        videoCtx.moveTo((x1 - cropX) * (videoCanvas.width / cropWidth),
+                (y1 - cropY) * (videoCanvas.height / cropHeight));
+        videoCtx.lineTo((x2 - cropX) * (videoCanvas.width / cropWidth),
+                (y2 - cropY) * (videoCanvas.height / cropHeight));
+        videoCtx.strokeStyle = 'lime';
+        videoCtx.lineWidth = 2;
+        videoCtx.stroke();
+      }
+    }
+
+    for (let conn of connections) {
+      const start = prediction.annotations[conn[0]][0];
+      const end = prediction.annotations[conn[1]][0];
+      videoCtx.beginPath();
+      videoCtx.moveTo((start[0] - cropX) * (videoCanvas.width / cropWidth),
+              (start[1] - cropY) * (videoCanvas.height / cropHeight));
+      videoCtx.lineTo((end[0] - cropX) * (videoCanvas.width / cropWidth),
+              (end[1] - cropY) * (videoCanvas.height / cropHeight));
+      videoCtx.strokeStyle = 'lime';
+      videoCtx.lineWidth = 2;
+      videoCtx.stroke();
+    }
+  }
+
+  async function main() {
+    await initCamera();
+    const model = await handpose.load();
+
+    async function gameLoop() {
+      const vw = video.videoWidth;
+      const vh = video.videoHeight;
+
+      let predictions = await model.estimateHands(video, true);
+
+      if (predictions.length > 0) {
+        const allX = predictions[0].landmarks.map(p => p[0]);
+        const minX = Math.min(...allX);
+        const maxX = Math.max(...allX);
+        handCenterX = (minX + maxX) / 2;
+
+        const fingerY = predictions[0].annotations.indexFinger[3][1];
+        const normalizedY = Math.max(0, Math.min(1, (fingerY - 0) / vh));
+        const mappedY = normalizedY * gameCanvas.height - paddleHeight / 2;
+        const targetY = Math.max(0, Math.min(gameCanvas.height - paddleHeight, mappedY));
+
+        smoothRightPaddleY = alpha * targetY + (1 - alpha) * smoothRightPaddleY;
+        rightPaddleY = smoothRightPaddleY;
+      }
+
+      const targetAspect = 9/16;
+      let cropHeight = vh;
+      let cropWidth = cropHeight * targetAspect;
+      let cropX = Math.max(0, Math.min(vw - cropWidth, handCenterX - cropWidth / 2));
+      const cropY = 0;
+
+      videoCtx.drawImage(video, cropX, cropY, cropWidth, cropHeight,
+              0, 0, videoCanvas.width, videoCanvas.height);
+
+      const boxMargin = 40;
+      const boxX = 20;
+      const boxY = boxMargin;
+      const boxWidth = videoCanvas.width - 40;
+      const boxHeight = videoCanvas.height - boxMargin * 2;
+      videoCtx.strokeStyle = 'lime';
+      videoCtx.lineWidth = 3;
+      videoCtx.strokeRect(boxX, boxY, boxWidth, boxHeight);
+      videoCtx.fillStyle = 'rgba(0, 255, 0, 0.1)';
+      videoCtx.fillRect(boxX, boxY, boxWidth, boxHeight);
+
+      if (predictions.length > 0) {
+        drawSkeleton(predictions[0], cropX, cropY, cropWidth, cropHeight);
+        predictions[0].landmarks.forEach(point => {
+          const px = (point[0] - cropX) * (videoCanvas.width / cropWidth);
+          const py = (point[1] - cropY) * (videoCanvas.height / cropHeight);
+          videoCtx.beginPath();
+          videoCtx.arc(px, py, 3, 0, 2 * Math.PI);
+          videoCtx.fillStyle = 'red';
+          videoCtx.fill();
+        });
+      }
+
+      updateBall();
+      drawGame();
+      requestAnimationFrame(gameLoop);
+    }
+
+    function updateBall() {
+      ballX += ballDX;
+      ballY += ballDY;
+      if (ballY < 0 || ballY > gameCanvas.height - ballSize) ballDY = -ballDY;
+      if (ballX < paddleWidth && ballY > leftPaddleY && ballY < leftPaddleY + paddleHeight) {
+        ballDX = -ballDX;
+      }
+      if (ballX > gameCanvas.width - paddleWidth - ballSize && ballY > rightPaddleY && ballY < rightPaddleY + paddleHeight) {
+        ballDX = -ballDX;
+      }
+
+      if (ballX > gameCanvas.width * 0.7) {
+        const diff = ballY - (rightPaddleY + paddleHeight / 2);
+        if (Math.abs(diff) > 40) {
+          rightPaddleY += Math.sign(diff) * 2;
+          rightPaddleY = Math.max(0, Math.min(gameCanvas.height - paddleHeight, rightPaddleY));
+        }
+      }
+
+      if (ballX < 0) { rightScore++; resetBall(); }
+      if (ballX > gameCanvas.width) { leftScore++; resetBall(); }
+
+      if (ballY < leftPaddleY + paddleHeight / 2) leftPaddleY -= 3;
+      if (ballY > leftPaddleY + paddleHeight / 2) leftPaddleY += 3;
+      leftPaddleY = Math.max(0, Math.min(gameCanvas.height - paddleHeight, leftPaddleY));
+    }
+
+    function drawGame() {
+      gameCtx.clearRect(0, 0, gameCanvas.width, gameCanvas.height);
+      gameCtx.fillStyle = 'white';
+      gameCtx.fillRect(0, leftPaddleY, paddleWidth, paddleHeight);
+      gameCtx.fillRect(gameCanvas.width - paddleWidth, rightPaddleY, paddleWidth, paddleHeight);
+      gameCtx.fillRect(ballX, ballY, ballSize, ballSize);
+      for (let i = 0; i < gameCanvas.height; i += 20) {
+        gameCtx.fillRect(gameCanvas.width/2 - 1, i, 2, 10);
+      }
+      gameCtx.font = "30px Arial";
+      gameCtx.fillText(`${leftScore} : ${rightScore}`, gameCanvas.width / 2 - 30, 40);
+    }
+
+    function resetBall() {
+      ballX = gameCanvas.width / 2;
+      ballY = gameCanvas.height / 2;
+      ballDX = -ballDX;
+      ballDY = (Math.random() * 4) - 2;
+    }
+
+    gameLoop();
+  }
+  main();
+</script>
+</body>
+</html>
