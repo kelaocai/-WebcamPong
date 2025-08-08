@@ -5,6 +5,42 @@
 > Real-time hand tracking with bone visualization, AI-assisted paddle control, and an 80s arcade style.  
 > 致敬经典 Pong，由 GPT-5 辅助生成，通过摄像头实时手势识别控制球拍，支持骨骼可视化与 AI 辅助补位，重现 80 年代街机风格。
 
+
+## 📖 Background / 开发背景
+
+The very first video game I ever played as a child was **Pong**.  
+It was simple — two paddles, one ball — yet it ignited my curiosity about games and technology.  
+This project is my personal tribute to that classic, reimagined with modern technology:  
+webcam-based hand tracking, AI-assisted gameplay, and retro arcade aesthetics.
+
+我小时候玩到的第一个电子游戏就是 **Pong**。  
+简单的两个球拍、一颗小球，却点燃了我对游戏和科技的好奇心。  
+这个项目是我对那款经典游戏的致敬，用现代技术重现它的魅力：  
+
+摄像头手势识别、AI 辅助对战，以及复古的街机风格。
+
+## ✏ Prototype / 原型手稿
+
+<img width="995" height="736" alt="prototype-sketch" src="https://github.com/user-attachments/assets/18b9d317-78c6-4329-ac08-e3f30f478e20" />
+
+
+This is my original hand-drawn prototype for **Webcam Pong**.  
+Before writing any code, I sketched how I imagined the game would look and function —  
+from the split-screen layout (game on the left, webcam feed on the right)  
+to the idea of a detection box, paddle positions, and score display.
+
+这是我为 **Webcam Pong** 绘制的原型手稿。  
+在写任何代码之前，我先画下了对游戏界面和交互方式的设想：  
+左侧是游戏画面，右侧是摄像头画面；  
+摄像头中有识别框，手势上下移动控制球拍；  
+顶部显示实时比分，一切尽量简洁直观。
+
+From this rough sketch, the project evolved into the fully functional version you see today,  
+thanks to GPT-5’s assistance in coding, feature iteration, and debugging.
+
+从这张简单的草图开始，在 GPT-5 的代码生成、功能迭代和调试帮助下，  
+它一步步发展成了今天这个完整可玩的版本。
+
 ---
 
 ## ✨ Features 功能特性
@@ -43,7 +79,8 @@
 
 | Game Screen / 游戏界面 | Camera View / 摄像头识别 |
 | --- | --- |
-| ![Game](docs/game-demo.png) | ![Camera](docs/camera-demo.png) |
+
+![SCR-20250809-dnfu](https://github.com/user-attachments/assets/9d965364-0d99-4602-ba86-8f0084a5e211)
 
 ---
 
