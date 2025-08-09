@@ -75,6 +75,9 @@ thanks to GPT-5’s assistance in coding, feature iteration, and debugging.
 
 ---
 
+<img width="1024" height="1536" alt="webcampong" src="https://github.com/user-attachments/assets/f135f5f5-9745-4887-b500-35e6371088b0" />
+
+
 ## 📸 Demo 演示
 
 | Game Screen / 游戏界面 | Camera View / 摄像头识别 |
