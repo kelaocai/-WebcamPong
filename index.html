@@ -8,7 +8,7 @@
       margin: 0;
       background: black;
       display: flex;
-      flex-direction: column; 
+      flex-direction: column; /* 垂直布局，标题在上 */
       align-items: center;
       height: 100vh;
       color: white;
@@ -27,13 +27,80 @@
     }
     #gameCanvas { background: #111; }
     #videoCanvas { background: #000; margin-left: 10px; }
+    
+    .controls {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: rgba(0, 0, 0, 0.8);
+      padding: 15px;
+      border-radius: 10px;
+      border: 2px solid #00ff88;
+      color: white;
+      font-size: 14px;
+      min-width: 200px;
+    }
+    
+    .controls h3 {
+      margin: 0 0 10px 0;
+      color: #00ff88;
+      font-size: 16px;
+    }
+    
+    .control-group {
+      margin-bottom: 10px;
+    }
+    
+    .control-group label {
+      display: block;
+      margin-bottom: 5px;
+      color: #ccc;
+    }
+    
+    .control-group input[type="range"] {
+      width: 100%;
+      margin-bottom: 5px;
+    }
+    
+    .control-group select {
+      width: 100%;
+      padding: 3px;
+      background: #333;
+      color: white;
+      border: 1px solid #555;
+      border-radius: 3px;
+    }
   </style>
 </head>
 <body>
 <h1>Webcam Pong </h1>
+
+<div class="controls">
+  <h3>⚙️ 游戏设置</h3>
+  <div class="control-group">
+    <label>AI 难度：<span id="difficultyValue">0.8</span></label>
+    <input type="range" id="difficultySlider" min="0.3" max="1.0" step="0.1" value="0.8">
+  </div>
+  <div class="control-group">
+    <label>球速：<span id="speedValue">4</span></label>
+    <input type="range" id="speedSlider" min="2" max="8" step="1" value="4">
+  </div>
+  <div class="control-group">
+    <label>控制灵敏度：<span id="sensitivityValue">0.3</span></label>
+    <input type="range" id="sensitivitySlider" min="0.1" max="0.5" step="0.05" value="0.3">
+  </div>
+  <div class="control-group">
+    <label>音效</label>
+    <select id="soundToggle">
+      <option value="true">开启</option>
+      <option value="false">关闭</option>
+    </select>
+  </div>
+</div>
+
 <div class="container">
   <canvas id="gameCanvas" width="800" height="500"></canvas>
-  <canvas id="videoCanvas" width="270" height="480"></canvas> <!-- 9:16比例 -->
+  <canvas id="videoCanvas" width="270" height="480"></canvas> <!-- 9:16 比例 -->
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
@@ -56,10 +123,66 @@
 
   let leftScore = 0, rightScore = 0;
   let video;
+  let aiDifficulty = 0.8; // AI 难度 (0.1-1.0)
+  let aiReactionTime = 0; // AI 反应延迟帧数
+  let particles = []; // 粒子系统
+  let gameSpeed = 4; // 游戏速度
+  let soundEnabled = true; // 音效开关
+  
+  // 音效系统
+  const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  function playBeep(frequency, duration) {
+    if (!soundEnabled) return;
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+    oscillator.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+    oscillator.frequency.value = frequency;
+    oscillator.type = 'sine';
+    gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + duration);
+    oscillator.start(audioContext.currentTime);
+    oscillator.stop(audioContext.currentTime + duration);
+  }
+  
+  // 设置控制
+  document.addEventListener('DOMContentLoaded', function() {
+    const difficultySlider = document.getElementById('difficultySlider');
+    const speedSlider = document.getElementById('speedSlider');
+    const sensitivitySlider = document.getElementById('sensitivitySlider');
+    const soundToggle = document.getElementById('soundToggle');
+    
+    difficultySlider.addEventListener('input', function() {
+      aiDifficulty = parseFloat(this.value);
+      document.getElementById('difficultyValue').textContent = aiDifficulty;
+    });
+    
+    speedSlider.addEventListener('input', function() {
+      gameSpeed = parseInt(this.value);
+      document.getElementById('speedValue').textContent = gameSpeed;
+    });
+    
+    sensitivitySlider.addEventListener('input', function() {
+      alpha = parseFloat(this.value);
+      document.getElementById('sensitivityValue').textContent = alpha;
+    });
+    
+    soundToggle.addEventListener('change', function() {
+      soundEnabled = this.value === 'true';
+    });
+  });
 
   let smoothRightPaddleY = gameCanvas.height / 2 - paddleHeight / 2;
-  let alpha = 0.4; // 平滑系数
+  let alpha = 0.3; // 降低默认平滑系数，提高稳定性
   let handCenterX = 0; // 手部水平中心位置
+  let handVelocity = 0; // 手部移动速度
+  let lastHandY = 0; // 上一帧手部位置
+  
+  // 增强的平滑系统
+  let handPositionHistory = []; // 手部位置历史记录
+  let maxHistoryLength = 8; // 历史记录长度
+  let smoothedHandY = 0; // 额外平滑的手部位置
+  let velocitySmooth = 0; // 平滑的速度
 
   async function initCamera() {
     video = document.createElement('video');
@@ -73,6 +196,83 @@
     return new Promise(resolve => {
       video.onloadedmetadata = () => resolve(video);
     });
+  }
+
+  // 粒子类
+  class Particle {
+    constructor(x, y, color = 'white') {
+      this.x = x;
+      this.y = y;
+      this.vx = (Math.random() - 0.5) * 10;
+      this.vy = (Math.random() - 0.5) * 10;
+      this.life = 30;
+      this.maxLife = 30;
+      this.color = color;
+    }
+    
+    update() {
+      this.x += this.vx;
+      this.y += this.vy;
+      this.vx *= 0.98;
+      this.vy *= 0.98;
+      this.life--;
+    }
+    
+    draw(ctx) {
+      const alpha = this.life / this.maxLife;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = this.color;
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+    
+    isDead() {
+      return this.life <= 0;
+    }
+  }
+
+  function createParticles(x, y, color, count = 8) {
+    for (let i = 0; i < count; i++) {
+      particles.push(new Particle(x, y, color));
+    }
+  }
+
+  // 数据稳定性检测和平滑处理
+  function smoothHandPosition(newY) {
+    // 添加到历史记录
+    handPositionHistory.push(newY);
+    if (handPositionHistory.length > maxHistoryLength) {
+      handPositionHistory.shift();
+    }
+    
+    // 如果历史记录不足，直接返回新值
+    if (handPositionHistory.length < 3) {
+      return newY;
+    }
+    
+    // 计算移动平均值
+    const average = handPositionHistory.reduce((sum, val) => sum + val, 0) / handPositionHistory.length;
+    
+    // 检测异常值（相比平均值变化过大）
+    const threshold = gameCanvas.height * 0.1; // 10% 的变化阈值
+    if (Math.abs(newY - average) > threshold) {
+      // 如果是异常值，使用历史平均值的加权结果
+      return average * 0.8 + newY * 0.2;
+    }
+    
+    // 使用加权平均，最近的值权重更高
+    let weightedSum = 0;
+    let totalWeight = 0;
+    for (let i = 0; i < handPositionHistory.length; i++) {
+      const weight = (i + 1) / handPositionHistory.length; // 越新的权重越大
+      weightedSum += handPositionHistory[i] * weight;
+      totalWeight += weight;
+    }
+    
+    return weightedSum / totalWeight;
   }
 
   function drawSkeleton(prediction, cropX, cropY, cropWidth, cropHeight) {
@@ -136,11 +336,36 @@
 
         const fingerY = predictions[0].annotations.indexFinger[3][1];
         const normalizedY = Math.max(0, Math.min(1, (fingerY - 0) / vh));
-        const mappedY = normalizedY * gameCanvas.height - paddleHeight / 2;
+        const rawHandY = normalizedY * gameCanvas.height;
+        
+        // 使用新的平滑算法处理手部位置
+        const smoothedY = smoothHandPosition(rawHandY);
+        
+        // 计算平滑的速度
+        const currentVelocity = smoothedY - smoothedHandY;
+        velocitySmooth = velocitySmooth * 0.7 + currentVelocity * 0.3;
+        smoothedHandY = smoothedY;
+        
+        // 减少预测性移动的强度，避免过度敏感
+        const predictiveOffset = velocitySmooth * 0.5; // 降低预测强度
+        const finalY = smoothedY + predictiveOffset;
+        const mappedY = finalY - paddleHeight / 2;
         const targetY = Math.max(0, Math.min(gameCanvas.height - paddleHeight, mappedY));
 
-        smoothRightPaddleY = alpha * targetY + (1 - alpha) * smoothRightPaddleY;
+        // 使用固定的平滑系数，避免动态变化造成的抖动
+        const fixedAlpha = Math.min(alpha, 0.4); // 限制最大平滑系数
+        
+        // 添加死区机制，减少微小移动造成的抖动
+        const deadZone = 3; // 像素死区
+        const targetDiff = targetY - smoothRightPaddleY;
+        if (Math.abs(targetDiff) > deadZone) {
+          smoothRightPaddleY = fixedAlpha * targetY + (1 - fixedAlpha) * smoothRightPaddleY;
+        }
+        
         rightPaddleY = smoothRightPaddleY;
+      } else {
+        // 如果没有检测到手势，逐渐减少速度
+        velocitySmooth *= 0.9;
       }
 
       const targetAspect = 9/16;
@@ -152,16 +377,68 @@
       videoCtx.drawImage(video, cropX, cropY, cropWidth, cropHeight,
               0, 0, videoCanvas.width, videoCanvas.height);
 
+      // 绘制手势识别区域和提示
       const boxMargin = 40;
       const boxX = 20;
       const boxY = boxMargin;
       const boxWidth = videoCanvas.width - 40;
       const boxHeight = videoCanvas.height - boxMargin * 2;
-      videoCtx.strokeStyle = 'lime';
+      
+      // 活跃区域背景
+      videoCtx.fillStyle = 'rgba(0, 255, 136, 0.05)';
+      videoCtx.fillRect(boxX, boxY, boxWidth, boxHeight);
+      
+      // 边框动画效果
+      const time = Date.now() * 0.003;
+      const borderIntensity = 0.7 + 0.3 * Math.sin(time);
+      videoCtx.strokeStyle = `rgba(0, 255, 136, ${borderIntensity})`;
       videoCtx.lineWidth = 3;
       videoCtx.strokeRect(boxX, boxY, boxWidth, boxHeight);
-      videoCtx.fillStyle = 'rgba(0, 255, 0, 0.1)';
-      videoCtx.fillRect(boxX, boxY, boxWidth, boxHeight);
+      
+      // 角落装饰
+      const cornerSize = 20;
+      videoCtx.strokeStyle = 'lime';
+      videoCtx.lineWidth = 4;
+      // 左上角
+      videoCtx.beginPath();
+      videoCtx.moveTo(boxX, boxY + cornerSize);
+      videoCtx.lineTo(boxX, boxY);
+      videoCtx.lineTo(boxX + cornerSize, boxY);
+      videoCtx.stroke();
+      // 右上角
+      videoCtx.beginPath();
+      videoCtx.moveTo(boxX + boxWidth - cornerSize, boxY);
+      videoCtx.lineTo(boxX + boxWidth, boxY);
+      videoCtx.lineTo(boxX + boxWidth, boxY + cornerSize);
+      videoCtx.stroke();
+      // 左下角
+      videoCtx.beginPath();
+      videoCtx.moveTo(boxX, boxY + boxHeight - cornerSize);
+      videoCtx.lineTo(boxX, boxY + boxHeight);
+      videoCtx.lineTo(boxX + cornerSize, boxY + boxHeight);
+      videoCtx.stroke();
+      // 右下角
+      videoCtx.beginPath();
+      videoCtx.moveTo(boxX + boxWidth - cornerSize, boxY + boxHeight);
+      videoCtx.lineTo(boxX + boxWidth, boxY + boxHeight);
+      videoCtx.lineTo(boxX + boxWidth, boxY + boxHeight - cornerSize);
+      videoCtx.stroke();
+      
+      // 文字提示
+      if (predictions.length === 0) {
+        videoCtx.fillStyle = 'rgba(0, 255, 136, 0.9)';
+        videoCtx.font = 'bold 16px Arial';
+        videoCtx.textAlign = 'center';
+        videoCtx.fillText('将手放入绿色区域', videoCanvas.width / 2, boxY + boxHeight / 2 - 10);
+        videoCtx.font = '14px Arial';
+        videoCtx.fillText('👋 伸出食指控制球拍', videoCanvas.width / 2, boxY + boxHeight / 2 + 15);
+      } else {
+        // 显示连接状态
+        videoCtx.fillStyle = 'rgba(0, 255, 0, 0.8)';
+        videoCtx.font = 'bold 12px Arial';
+        videoCtx.textAlign = 'center';
+        videoCtx.fillText('✓ 手势识别中', videoCanvas.width / 2, boxY - 5);
+      }
 
       if (predictions.length > 0) {
         drawSkeleton(predictions[0], cropX, cropY, cropWidth, cropHeight);
@@ -183,28 +460,77 @@
     function updateBall() {
       ballX += ballDX;
       ballY += ballDY;
-      if (ballY < 0 || ballY > gameCanvas.height - ballSize) ballDY = -ballDY;
+      if (ballY < 0 || ballY > gameCanvas.height - ballSize) {
+        ballDY = -ballDY;
+        createParticles(ballX + ballSize/2, ballY < 0 ? 0 : gameCanvas.height, '#00ff88', 6);
+        playBeep(800, 0.1);
+      }
       if (ballX < paddleWidth && ballY > leftPaddleY && ballY < leftPaddleY + paddleHeight) {
         ballDX = -ballDX;
+        // 添加角度变化
+        ballDY += (ballY - (leftPaddleY + paddleHeight/2)) * 0.1;
+        createParticles(ballX, ballY + ballSize/2, '#ff4444', 10);
+        playBeep(600, 0.15);
       }
       if (ballX > gameCanvas.width - paddleWidth - ballSize && ballY > rightPaddleY && ballY < rightPaddleY + paddleHeight) {
         ballDX = -ballDX;
+        // 添加角度变化
+        ballDY += (ballY - (rightPaddleY + paddleHeight/2)) * 0.1;
+        createParticles(ballX + ballSize, ballY + ballSize/2, '#4444ff', 10);
+        playBeep(600, 0.15);
       }
 
-      if (ballX > gameCanvas.width * 0.7) {
-        const diff = ballY - (rightPaddleY + paddleHeight / 2);
-        if (Math.abs(diff) > 40) {
-          rightPaddleY += Math.sign(diff) * 2;
-          rightPaddleY = Math.max(0, Math.min(gameCanvas.height - paddleHeight, rightPaddleY));
+      // 改进的AI逻辑
+      if (ballDX < 0 && ballX < gameCanvas.width * 0.6) { // 球向左移动且在左半场
+        // 预测球到达左边界的Y位置
+        const timeToReach = Math.abs(ballX - paddleWidth) / Math.abs(ballDX);
+        let predictedY = ballY + ballDY * timeToReach;
+        
+        // 处理反弹
+        while (predictedY < 0 || predictedY > gameCanvas.height) {
+          if (predictedY < 0) predictedY = -predictedY;
+          if (predictedY > gameCanvas.height) predictedY = 2 * gameCanvas.height - predictedY;
         }
+        
+        const targetY = predictedY - paddleHeight / 2;
+        const clampedTargetY = Math.max(0, Math.min(gameCanvas.height - paddleHeight, targetY));
+        
+        // 根据难度调整 AI 移动速度和准确性
+        const aiSpeed = 2 + aiDifficulty * 3;
+        const accuracy = 0.7 + aiDifficulty * 0.3;
+        const randomOffset = (Math.random() - 0.5) * 20 * (1 - accuracy);
+        
+        const finalTargetY = clampedTargetY + randomOffset;
+        
+        if (Math.abs(leftPaddleY + paddleHeight/2 - predictedY) > 10) {
+          if (leftPaddleY + paddleHeight/2 < finalTargetY) {
+            leftPaddleY += aiSpeed;
+          } else {
+            leftPaddleY -= aiSpeed;
+          }
+        }
+        
+        leftPaddleY = Math.max(0, Math.min(gameCanvas.height - paddleHeight, leftPaddleY));
       }
 
-      if (ballX < 0) { rightScore++; resetBall(); }
-      if (ballX > gameCanvas.width) { leftScore++; resetBall(); }
-
-      if (ballY < leftPaddleY + paddleHeight / 2) leftPaddleY -= 3;
-      if (ballY > leftPaddleY + paddleHeight / 2) leftPaddleY += 3;
-      leftPaddleY = Math.max(0, Math.min(gameCanvas.height - paddleHeight, leftPaddleY));
+      if (ballX < 0) { 
+        rightScore++; 
+        resetBall(); 
+        playBeep(300, 0.3);
+        createParticles(0, ballY, '#ffff00', 15);
+      }
+      if (ballX > gameCanvas.width) { 
+        leftScore++; 
+        resetBall(); 
+        playBeep(300, 0.3);
+        createParticles(gameCanvas.width, ballY, '#ffff00', 15);
+      }
+      
+      // 更新粒子
+      particles = particles.filter(particle => {
+        particle.update();
+        return !particle.isDead();
+      });
     }
 
     function drawGame() {
@@ -212,18 +538,33 @@
       gameCtx.fillStyle = 'white';
       gameCtx.fillRect(0, leftPaddleY, paddleWidth, paddleHeight);
       gameCtx.fillRect(gameCanvas.width - paddleWidth, rightPaddleY, paddleWidth, paddleHeight);
+      
+      // 绘制球（带发光效果）
+      gameCtx.shadowColor = 'white';
+      gameCtx.shadowBlur = 10;
       gameCtx.fillRect(ballX, ballY, ballSize, ballSize);
+      gameCtx.shadowBlur = 0;
+      
+      // 绘制中线
       for (let i = 0; i < gameCanvas.height; i += 20) {
         gameCtx.fillRect(gameCanvas.width/2 - 1, i, 2, 10);
       }
+      
+      // 绘制分数（带发光效果）
       gameCtx.font = "30px Arial";
+      gameCtx.shadowColor = '#00ff88';
+      gameCtx.shadowBlur = 5;
       gameCtx.fillText(`${leftScore} : ${rightScore}`, gameCanvas.width / 2 - 30, 40);
+      gameCtx.shadowBlur = 0;
+      
+      // 绘制粒子
+      particles.forEach(particle => particle.draw(gameCtx));
     }
 
     function resetBall() {
       ballX = gameCanvas.width / 2;
       ballY = gameCanvas.height / 2;
-      ballDX = -ballDX;
+      ballDX = Math.sign(ballDX) * gameSpeed;
       ballDY = (Math.random() * 4) - 2;
     }
 
